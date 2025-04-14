@@ -113,12 +113,12 @@ def train_single_step(param, is_augmented=True, num_steps=10, integration_method
 
     # init
     if param['nx'] == 97: # LR and original paper
-        p = torch.from_numpy(np.load('./p_380yrs_HRDS.npy')).to(param['device']).type(torch.float32)
+        p = torch.from_numpy(np.load('./p_380yrs_HRDS.npy')).to(param['device'])
     else: # TODO generate initial state of right size 
         p = qg_multilayer.p0    
     q_over_f0 = qg_multilayer.compute_q_over_f0_from_p(p)
     y0 = torch.stack((q_over_f0,p),0).to(param["device"]) # nc nl nx ny
-    t = torch.arange(0, net.num_steps, 1).type(torch.float32).to(param["device"]) # time steps
+    t = torch.arange(0, (net.num_steps+1) * net.dt, net.dt).type(torch.float32).to(param["device"]) # time steps
     for k in range(nb_epochs):
         optimizer.zero_grad()
         out = net(y0, t)
@@ -153,7 +153,7 @@ def run_QG(param, num_steps=10, integration_method="heun2"):
 
     # init
     if param['nx'] == 97: # LR and original paper
-        p = torch.from_numpy(np.load('./p_380yrs_HRDS.npy')).to(param['device']).type(torch.float32)
+        p = torch.from_numpy(np.load('./p_380yrs_HRDS.npy')).to(param['device']) 
     else: # TODO generate initial state of right size 
         p = qg_multilayer.p0    
     q_over_f0 = qg_multilayer.compute_q_over_f0_from_p(p)

@@ -350,7 +350,6 @@ class QGM_differentiable:
         self.x, self.y = torch.meshgrid(torch.linspace(0, self.Lx, self.nx, **self.arr_kwargs),
                                         torch.linspace(0, self.Ly, self.ny, **self.arr_kwargs),
                                         indexing='ij')
-        self.x, self.y = self.x.type(torch.float32), self.y.type(torch.float32)
         self.y0 = 0.5 * self.Ly
         self.dx = self.Lx / (self.nx-1)
         self.dy = self.Ly / (self.ny-1)
@@ -374,16 +373,9 @@ class QGM_differentiable:
         self.alpha_matrix = self.compute_alpha_matrix()
         self.helmoltz_dst = self.helmoltz_dst.type(torch.float32)
 
-        # put to right type
-        self.A = self.A.type(torch.float32)
-        self.Cl2m = self.Cl2m.type(torch.float32)
-        self.Cm2l = self.Cm2l.type(torch.float32)
-        self.lambd = self.lambd.type(torch.float32)
-        self.alpha_matrix = self.alpha_matrix.type(torch.float32)
-
         # initialize pressure p and potential vorticity q
         self.p_shape = (self.nl, self.nx, self.ny) if self.n_ens == 0 else (self.n_ens, self.nl, self.nx, self.ny)
-        self.p0 = torch.zeros(self.p_shape, **self.arr_kwargs).type(torch.float32)
+        self.p0 = torch.zeros(self.p_shape, **self.arr_kwargs)
         q_over_f0 = self.compute_q_over_f0_from_p(self.p0) # we get q from p using the Helmhotz equation (2)
 
         # precompile torch functions
@@ -564,7 +556,7 @@ class HybridForecaster(nn.Module):
         dq_over_f0, dp = self.model_phy.compute_time_derivatives(y0)
         if self.is_augmented:
             # augmented dynamics
-            in_unet = rearrange(y0, 'nc nl nx ny -> 1 (nc nl) nx ny') #.type(torch.float32)
+            in_unet = rearrange(y0, 'nc nl nx ny -> 1 (nc nl) nx ny').type(torch.float32)
             dq_aug, dp_aug = self.model_aug(in_unet)
             dq_over_f0 = dq_over_f0 + dq_aug
             dp = dp + dp_aug
@@ -618,4 +610,4 @@ if __name__ == "__main__":
     t = torch.arange(0, 10, 1).type(torch.float32).to(param["device"]) # time steps
     #print(net.derivative_estimator(y0).shape)
     out = net(y0, t)
-    print(out.shape)
+    print(out.type())
