@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
-from qg import QGM
+from qg import QGM_differentiable, Unet, HybridForecaster
 
 torch.backends.cudnn.deterministic = True
 
@@ -94,8 +94,86 @@ def qg_only():
     print(100*(time.time()-t0)/(60*60))
     plt.show()
 
-def train_single_step():
-    param = {
+def train_single_step(param, is_augmented=True, num_steps=10, integration_method="heun2"):
+    # init hybrid model
+    qg_multilayer = QGM_differentiable(param)
+    nb_channels = param["nl"] * 2  # 2 channels per layer (dq, dp)
+    unet = Unet(nb_channels, nb_channels, param["n_ens"]).to(param["device"])
+    net = HybridForecaster(
+        model_phy=qg_multilayer,
+        model_aug=unet,
+        dt=param["dt"],
+        num_steps=num_steps, 
+        integration_method=integration_method,
+        is_augmented=is_augmented,
+    )
+    loss = torch.nn.MSELoss()
+    optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
+    nb_epochs=10
+
+    # init
+    if param['nx'] == 97: # LR and original paper
+        p = torch.from_numpy(np.load('./p_380yrs_HRDS.npy')).to(param['device']).type(torch.float32)
+    else: # TODO generate initial state of right size 
+        p = qg_multilayer.p0    
+    q_over_f0 = qg_multilayer.compute_q_over_f0_from_p(p)
+    y0 = torch.stack((q_over_f0,p),0).to(param["device"]) # nc nl nx ny
+    t = torch.arange(0, net.num_steps, 1).type(torch.float32).to(param["device"]) # time steps
+    for k in range(nb_epochs):
+        optimizer.zero_grad()
+        out = net(y0, t)
+        q_over_f0, p = out[:,0], out[:,1]
+        q = qg_multilayer.f0 * q_over_f0 
+        
+        # compute loss
+        loss_value = loss(p, q)
+        # backprop
+        loss_value.backward(retain_graph=True)
+        optimizer.step()
+        print(f'Epoch {k}, Loss {loss_value}')
+    
+    return None 
+
+
+# to compare to original one
+def run_QG(param, num_steps=10, integration_method="heun2"):
+    # init hybrid model
+    dt = param["dt"]
+    qg_multilayer = QGM_differentiable(param)
+    nb_channels = param["nl"] * 2  # 2 channels per layer (dq, dp)
+    unet = Unet(nb_channels, nb_channels, param["n_ens"]).to(param["device"])
+    net = HybridForecaster(
+        model_phy=qg_multilayer,
+        model_aug=unet,
+        dt=dt,
+        num_steps=1, 
+        integration_method=integration_method,
+        is_augmented=False,
+    )
+
+    # init
+    if param['nx'] == 97: # LR and original paper
+        p = torch.from_numpy(np.load('./p_380yrs_HRDS.npy')).to(param['device']).type(torch.float32)
+    else: # TODO generate initial state of right size 
+        p = qg_multilayer.p0    
+    q_over_f0 = qg_multilayer.compute_q_over_f0_from_p(p)
+    y0 = torch.stack((q_over_f0,p),0).to(param["device"]) # nc nl nx ny
+    t = torch.arange(0, (net.num_steps+1)*dt, dt).type(torch.float32).to(param["device"]) # single step 
+    # t_all = torch.arange(0, num_steps+1, 1).type(torch.float32).to(param["device"]) # all steps 
+    # out_all = net(y0, t_all)
+    for k in range(num_steps):
+        out = net(y0, t)
+        y0 = out[-1]
+        q_over_f0, p = out[:,0], out[:,1]
+        q = qg_multilayer.f0 * q_over_f0 
+    final_state = out[-1]
+    #print(final_state == out_all[-1])
+    return final_state
+
+if __name__ == '__main__':
+    #qg_only()
+    torch.autograd.set_detect_anomaly(True)
+    param_aug = {
         # 'nx': 769, # HR
         # 'ny': 961, # HR
         #'nx': 97, # LR
@@ -121,28 +199,30 @@ def train_single_step():
         'device': 'cpu', # torch only, 'cuda' or 'cpu'
         'p_prime': '' # corrective pressure field -> our NN 
     }
+    #train_single_step(param_aug, is_augmented=True, num_steps=10, integration_method="heun2")
 
-    qg_multilayer = QGM(param)
-    loss = torch.nn.MSELoss()
-    optimizer = torch.optim.Adam(qg_multilayer.unet.parameters(), lr=1e-3)
-    nb_epochs=10
-    for k in range(nb_epochs):
-        qg_multilayer.step()
-        # get q,p 
-        u = qg_multilayer.compute_u()[0]
-        q = qg_multilayer.q_over_f0*qg_multilayer.f0
-        p = qg_multilayer.p
-        # compute loss
-        loss_value = loss(q, p)
-        # backprop
-        optimizer.zero_grad()
-        loss_value.backward()
-        optimizer.step()
-        print(f'Epoch {k}, Loss {loss_value}')
-    
-    return None 
-
-if __name__ == '__main__':
-    #qg_only()
-    torch.autograd.set_detect_anomaly(True)
-    train_single_step()
+    param = {
+        # 'nx': 769, # HR
+        # 'ny': 961, # HR
+        'nx': 97, # LR
+        'ny': 121, # LR
+        'Lx': 3840.0e3, # Length in the x direction (m)
+        'Ly': 4800.0e3, # Length in the y direction (m)
+        'nl': 3, # number of layers
+        'heights': [350., 750., 2900.], # heights between layers (m)
+        'reduced_gravities': [0.025, 0.0125], # reduced gravity numbers (m/s^2)
+        'f0': 9.375e-5, # coriolis (s^-1)
+        'a_2': 0., # laplacian diffusion coef (m^2/s)
+        # 'a_4': 2.0e9, # HR
+        'a_4': 5.0e11, # LR
+        'beta': 1.754e-11, # coriolis gradient (m^-1 s^-1)
+        'delta_ek': 2.0, # eckman height (m)
+        # 'dt': 600., # HR
+        'dt': 1200., # LR
+        'bcco': 0.2, # boundary condition coef. (non-dim.)
+        'tau0': 2.0e-5, # wind stress magnitude m/s^2
+        'n_ens': 0, # 0 for no ensemble,
+        'device': 'cpu', # torch only, 'cuda' or 'cpu'
+        'p_prime': ''
+    }
+    run_QG(param, num_steps=10, integration_method="heun2")

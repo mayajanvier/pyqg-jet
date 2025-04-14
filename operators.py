@@ -23,11 +23,12 @@ def dstI2D(x, norm='ortho'):
     return dstI1D(dstI1D(x, norm=norm).transpose(-1,-2), norm=norm).transpose(-1,-2)
 
 
+# TODO: is type float64 important 
 def inverse_elliptic_dst(f, operator_dst):
     """Inverse elliptic operator (e.g. Laplace, Helmoltz)
        using float32 discrete sine transform."""
     # return dstI2D((dstI2D(f.type(torch.float32)) / operator_dst).type(torch.float64))
-    return dstI2D(dstI2D(f.type(torch.float32)) / operator_dst).type(torch.float64)
+    return dstI2D(dstI2D(f) / operator_dst) #.type(torch.float32)
 
 
 ## discrete spatial differential operators
