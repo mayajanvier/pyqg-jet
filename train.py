@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from qg import QGM_differentiable, Unet, HybridForecaster
+import json
 
 torch.backends.cudnn.deterministic = True
 
@@ -136,7 +137,7 @@ def train_single_step(param, is_augmented=True, num_steps=10, integration_method
 
 
 # to compare to original one
-def run_QG(param, num_steps=10, integration_method="heun2"):
+def run_QG(param, num_steps=10, integration_method="heun2", zero_init=False):
     # init hybrid model
     dt = param["dt"]
     qg_multilayer = QGM_differentiable(param)
@@ -152,10 +153,13 @@ def run_QG(param, num_steps=10, integration_method="heun2"):
     )
 
     # init
-    if param['nx'] == 97: # LR and original paper
-        p = torch.from_numpy(np.load('./p_380yrs_HRDS.npy')).to(param['device']) 
-    else: # TODO generate initial state of right size 
-        p = qg_multilayer.p0    
+    if zero_init:
+        p = qg_multilayer.p0 
+    else:
+        if param['nx'] == 97: # LR and original paper
+            p = torch.from_numpy(np.load('./p_380yrs_HRDS.npy')).to(param['device']) 
+        else:
+            p = qg_multilayer.p0
     q_over_f0 = qg_multilayer.compute_q_over_f0_from_p(p)
     y0 = torch.stack((q_over_f0,p),0).to(param["device"]) # nc nl nx ny
     t = torch.arange(0, (net.num_steps+1)*dt, dt).type(torch.float32).to(param["device"]) # single step 
@@ -169,6 +173,41 @@ def run_QG(param, num_steps=10, integration_method="heun2"):
     final_state = out[-1]
     #print(final_state == out_all[-1])
     return final_state
+
+
+def run_save_ground_truth(param_path, n_years, integration_method="heun2", save_every_yr=1, folder='data/HR'):
+    # open params json file
+    with open(param_path, 'r') as f:
+        param = json.load(f)
+    # init hybrid model
+    dt = param["dt"]
+    n_steps = int(n_years*365*24*3600 / dt)
+    #n_steps_every_yr = 10  # test
+    n_steps_every_yr = int(save_every_yr*365*24*3600 / dt)
+    assert n_steps % n_steps_every_yr == 0
+    nb_steps = n_steps // n_steps_every_yr
+
+    qg_multilayer = QGM_differentiable(param)
+    net = HybridForecaster(
+        model_phy=qg_multilayer,
+        model_aug=None,
+        dt=dt,
+        num_steps=n_steps_every_yr, # one year step
+        integration_method=integration_method,
+        is_augmented=False, # QG only 
+    )
+
+    # init
+    p = qg_multilayer.p0 
+    q_over_f0 = qg_multilayer.compute_q_over_f0_from_p(p)
+    y0 = torch.stack((q_over_f0,p),0).to(param["device"]) # nc nl nx ny
+    t = torch.arange(0, (net.num_steps+1)*dt, dt).type(torch.float32).to(param["device"]) # single step 
+    for k in range(nb_steps):
+        out = net(y0, t) # single year step
+        y0 = out[-1]
+        np.save(f'./{folder}/y_{k}yrs.npy', y0.cpu().numpy())
+    # save final state
+    np.save(f'./{folder}/y_{k}yrs.npy', y0.cpu().numpy())
 
 if __name__ == '__main__':
     #qg_only()
@@ -225,4 +264,6 @@ if __name__ == '__main__':
         'device': 'cpu', # torch only, 'cuda' or 'cpu'
         'p_prime': ''
     }
-    run_QG(param, num_steps=10, integration_method="heun2")
+    #run_QG(param, num_steps=10, integration_method="heun2")
+
+    run_save_ground_truth("parameters/HR_params.json", n_years=1)
