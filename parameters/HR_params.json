@@ -15,5 +15,6 @@
     "bcco": 0.2,
     "tau0": 2e-05,
     "n_ens": 0,
-    "device": "cpu"
+    "device": "cuda",
+    "folder": "data/HR"
 }
